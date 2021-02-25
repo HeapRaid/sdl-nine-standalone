@@ -12,16 +12,17 @@
 #include <X11/Xlib.h>
 
 struct dri_backend;
+typedef enum _D3DFORMAT D3DFORMAT;
 
-HRESULT present_create_present_group(Display *gdi_display, const WCHAR *device_name,
-        HWND focus, D3DPRESENT_PARAMETERS *params, unsigned nparams, ID3DPresentGroup **group,
-        boolean ex, DWORD BehaviorFlags, struct dri_backend *dri_backend);
+HRESULT present_create_present_group(Display *gdi_display, HWND focus,
+        D3DPRESENT_PARAMETERS *params, D3DDISPLAYMODEEX *pFullscreenDisplayMode,
+        unsigned nparams, ID3DPresentGroup **group, BOOL ex, DWORD BehaviorFlags,
+        struct dri_backend *dri_backend);
 
-HRESULT present_create_adapter9(Display *gdi_display, HDC hdc,
-        struct dri_backend *dri_backend, ID3DAdapter9 **adapter);
+HRESULT present_create_adapter9(struct dri_backend *dri_backend, ID3DAdapter9 **adapter);
 
 BOOL present_has_d3dadapter(Display *gdi_display);
 
-BOOL enable_device_vtable_wrapper(void);
+D3DFORMAT to_d3d_format(DWORD sdl_format);
 
 #endif /* __NINE_PRESENT_H */

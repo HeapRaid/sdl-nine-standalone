@@ -8,7 +8,7 @@
 
 #ifdef D3D9NINE_DRI2
 
-#include <windows.h>
+#include <d3d9types.h>
 #include <sys/ioctl.h>
 #include <X11/Xlib-xcb.h>
 #include <xcb/dri2.h>
@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <GL/gl.h>
 #include <EGL/egl.h>
@@ -108,8 +109,7 @@ static BOOL dri2_connect(Display *dpy, XID window, unsigned driver_type, char **
     }
 
     /* read out device */
-    *device = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-        xcb_dri2_connect_device_name_length(reply) + 1);
+    *device = calloc(xcb_dri2_connect_device_name_length(reply) + 1, sizeof(char));
     if (!*device) {
         free(reply);
         return False;
@@ -175,7 +175,7 @@ static BOOL dri2_create(Display *dpy, int screen, struct dri_backend_priv **priv
         return FALSE;
 
     fd = open(device, O_RDWR);
-    HeapFree(GetProcessHeap(), 0, device);
+    free(device);
     if (fd < 0)
         return FALSE;
 
@@ -191,7 +191,7 @@ static BOOL dri2_create(Display *dpy, int screen, struct dri_backend_priv **priv
         return FALSE;
     }
 
-    p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(struct dri2_priv));
+    p = calloc(1, sizeof(struct dri2_priv));
     if (!p)
     {
         close(fd);
@@ -250,7 +250,7 @@ static BOOL dri2_create(Display *dpy, int screen, struct dri_backend_priv **priv
 
 err_egl:
     close(fd);
-    HeapFree(GetProcessHeap(), 0, p);
+    free(p);
     return FALSE;
 }
 
@@ -447,7 +447,7 @@ static BOOL dri2_present(struct dri_backend_priv *priv, int fd, int width, int h
 
     p->eglMakeCurrent(p->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
-    pp = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(struct dri2_pixmap_priv));
+    pp = calloc(1, sizeof(struct dri2_pixmap_priv));
 
     if (!pp)
         goto fail;
@@ -484,15 +484,14 @@ static BOOL dri2_window_buffer_from_dmabuf(struct dri_backend_priv *priv,
     if (!out)
         return FALSE;
 
-    *out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(struct D3DWindowBuffer));
+    *out = calloc(1, sizeof(struct D3DWindowBuffer));
     if (!*out)
         return FALSE;
 
     if (!PRESENTPixmapCreate(present_priv, p->screen, &pixmap,
             width, height, stride, depth, bpp))
     {
-        HeapFree(GetProcessHeap(), 0, *out);
+        free(*out);
         ERR("Failed to create pixmap\n");
         return FALSE;
     }
@@ -501,14 +500,14 @@ static BOOL dri2_window_buffer_from_dmabuf(struct dri_backend_priv *priv,
             &(*out)->priv, &pixmap))
     {
         ERR("dri2_present failed\n");
-        HeapFree(GetProcessHeap(), 0, *out);
+        free(*out);
         return FALSE;
     }
 
     if (!PRESENTPixmapInit(present_priv, pixmap, &((*out)->present_pixmap_priv)))
     {
         ERR("PRESENTPixmapInit failed\n");
-        HeapFree(GetProcessHeap(), 0, *out);
+        free(*out);
         return FALSE;
     }
 
@@ -556,7 +555,7 @@ static void dri2_destroy_pixmap(struct dri_backend_priv *priv, struct buffer_pri
     p->eglMakeCurrent(p->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     p->eglBindAPI(current_api);
 
-    HeapFree(GetProcessHeap(), 0, pp);
+    free(pp);
 }
 
 /* hypothesis: at this step all textures, etc are destroyed */
@@ -600,7 +599,7 @@ static void dri2_destroy(struct dri_backend_priv *priv)
 
     close(p->fd);
 
-    HeapFree(GetProcessHeap(), 0, p);
+    free(p);
 }
 
 static BOOL dri2_probe(Display *dpy)

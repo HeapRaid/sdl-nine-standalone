@@ -11,17 +11,21 @@
  */
 
 #include <d3dadapter/d3dadapter9.h>
+#include <stdlib.h>
+#include <SDL2/SDL.h>
 
 #include "../common/debug.h"
 #include "present.h"
-#include "device_wrap.h"
 #include "backend.h"
+
+const GUID IID_IUnknown = { 0x00000000, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID IID_IDirect3D9 = { 0x81bdcbca, 0x64d4, 0x426d, { 0xae, 0x8d, 0xad, 0x1, 0x47, 0xf4, 0x27, 0x5c } };
+const GUID IID_IDirect3D9Ex = { 0x02177241, 0x69fc, 0x400c, { 0x8f, 0xf1, 0x93, 0xa4, 0x4d, 0xf6, 0x86, 0x1d } };
 
 /* this represents a snapshot taken at the moment of creation */
 struct output
 {
-    D3DDISPLAYROTATION rotation; /* current rotation */
-    D3DDISPLAYMODEEX *modes;
+    SDL_DisplayMode *modes;
     unsigned nmodes;
     unsigned nmodesalloc;
 
@@ -33,10 +37,6 @@ struct adapter_group
     struct output *outputs;
     unsigned noutputs;
     unsigned noutputsalloc;
-
-    /* override driver provided DeviceName with this to homogenize device names
-     * with wine */
-    WCHAR devname[32];
 
     /* driver stuff */
     ID3DAdapter9 *adapter;
@@ -65,7 +65,7 @@ struct d3dadapter9
     unsigned ngroupsalloc;
 
     /* true if it implements IDirect3D9Ex */
-    boolean ex;
+    BOOL ex;
     Display *gdi_display;
 };
 
@@ -81,54 +81,29 @@ struct d3dadapter9
 
 static int get_current_mode(struct d3dadapter9 *This, UINT Adapter)
 {
-    DEVMODEW m;
-    D3DSCANLINEORDERING slo;
-    D3DFORMAT f;
+    SDL_DisplayMode m;
+    SDL_PixelFormatEnum f;
     int i;
 
-    memset(&m, 0, sizeof(m));
-    m.dmSize = sizeof(m);
-    EnumDisplaySettingsExW(ADAPTER_GROUP.devname, ENUM_CURRENT_SETTINGS, &m, 0);
-
-    switch (m.dmBitsPerPel)
-    {
-        case 32:
-            f = D3DFMT_X8R8G8B8;
-            break;
-        case 24:
-            f = D3DFMT_R8G8B8;
-            break;
-        case 16:
-            f = D3DFMT_R5G6B5;
-            break;
-        default:
-            return -1;
-    }
-
-    if (m.dmDisplayFlags & DM_INTERLACED)
-        slo = D3DSCANLINEORDERING_INTERLACED;
-    else
-        slo = D3DSCANLINEORDERING_PROGRESSIVE;
+    ZeroMemory(&m, sizeof(m));
+    SDL_GetCurrentDisplayMode(Adapter, &m);
 
     for (i = 0; i < ADAPTER_OUTPUT.nmodes; i++)
     {
-        if (ADAPTER_OUTPUT.modes[i].Width != m.dmPelsWidth)
+        if (ADAPTER_OUTPUT.modes[i].w != m.w)
             continue;
 
-        if (ADAPTER_OUTPUT.modes[i].Height != m.dmPelsHeight)
+        if (ADAPTER_OUTPUT.modes[i].h != m.h)
             continue;
 
-        if (ADAPTER_OUTPUT.modes[i].RefreshRate != m.dmDisplayFrequency)
+        if (ADAPTER_OUTPUT.modes[i].refresh_rate != m.refresh_rate)
             continue;
 
-        if (ADAPTER_OUTPUT.modes[i].Format != f)
-            continue;
-
-        if (ADAPTER_OUTPUT.modes[i].ScanLineOrdering != slo)
+        if (ADAPTER_OUTPUT.modes[i].format != f)
             continue;
 
         TRACE("current mode %d (%ux%ux%u)\n", i,
-              m.dmPelsWidth, m.dmPelsHeight, m.dmBitsPerPel);
+              m.w, m.h, SDL_BITSPERPIXEL(m.format));
 
         return i;
     }
@@ -156,7 +131,7 @@ static ULONG WINAPI d3dadapter9_Release(struct d3dadapter9 *This)
         /* dtor */
         if (This->map)
         {
-            HeapFree(GetProcessHeap(), 0, This->map);
+            free(This->map);
         }
 
         if (This->groups)
@@ -170,11 +145,10 @@ static ULONG WINAPI d3dadapter9_Release(struct d3dadapter9 *This)
                     {
                         if (This->groups[i].outputs[j].modes)
                         {
-                            HeapFree(GetProcessHeap(), 0,
-                                     This->groups[i].outputs[j].modes);
+                            free(This->groups[i].outputs[j].modes);
                         }
                     }
-                    HeapFree(GetProcessHeap(), 0, This->groups[i].outputs);
+                    free(This->groups[i].outputs);
                 }
 
                 if (This->groups[i].adapter)
@@ -182,10 +156,10 @@ static ULONG WINAPI d3dadapter9_Release(struct d3dadapter9 *This)
 
                 backend_destroy(This->groups[i].dri_backend);
             }
-            HeapFree(GetProcessHeap(), 0, This->groups);
+            free(This->groups);
         }
 
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This);
     }
     return refs;
 }
@@ -226,48 +200,10 @@ static UINT WINAPI d3dadapter9_GetAdapterCount(struct d3dadapter9 *This)
 static HRESULT WINAPI d3dadapter9_GetAdapterIdentifier(struct d3dadapter9 *This,
         UINT Adapter, DWORD Flags, D3DADAPTER_IDENTIFIER9 *pIdentifier)
 {
-    HRESULT hr;
-    HKEY regkey;
-
     if (Adapter >= d3dadapter9_GetAdapterCount(This))
         return D3DERR_INVALIDCALL;
 
-    hr = ADAPTER_PROC(GetAdapterIdentifier, Flags, pIdentifier);
-    if (SUCCEEDED(hr))
-    {
-        /* Override the driver provided DeviceName with what Wine provided */
-        ZeroMemory(pIdentifier->DeviceName, sizeof(pIdentifier->DeviceName));
-        if (!WideCharToMultiByte(CP_ACP, 0, ADAPTER_GROUP.devname, -1,
-                pIdentifier->DeviceName, sizeof(pIdentifier->DeviceName), NULL, NULL))
-            return D3DERR_INVALIDCALL;
-
-        TRACE("DeviceName overriden: %s\n", pIdentifier->DeviceName);
-
-        /* Override PCI IDs when wined3d registry keys are set */
-        if (!RegOpenKeyA(HKEY_CURRENT_USER, "Software\\Wine\\Direct3DNine", &regkey))
-        {
-            DWORD type, data;
-            DWORD size = sizeof(DWORD);
-
-            if (!RegQueryValueExA(regkey, "VideoPciDeviceID", 0, &type, (BYTE *)&data, &size) &&
-                    (type == REG_DWORD) && (size == sizeof(DWORD)))
-                pIdentifier->DeviceId = data;
-            if (size != sizeof(DWORD))
-            {
-                ERR("VideoPciDeviceID is not a DWORD\n");
-                size = sizeof(DWORD);
-            }
-            if (!RegQueryValueExA(regkey, "VideoPciVendorID", 0, &type, (BYTE *)&data, &size) &&
-                    (type == REG_DWORD) && (size == sizeof(DWORD)))
-                pIdentifier->VendorId = data;
-            if (size != sizeof(DWORD))
-                ERR("VideoPciVendorID is not a DWORD\n");
-            RegCloseKey(regkey);
-
-            TRACE("DeviceId:VendorId overridden: %04X:%04X\n", pIdentifier->DeviceId, pIdentifier->VendorId);
-        }
-    }
-    return hr;
+    return ADAPTER_PROC(GetAdapterIdentifier, Flags, pIdentifier);
 }
 
 static UINT WINAPI d3dadapter9_GetAdapterModeCount(struct d3dadapter9 *This,
@@ -310,9 +246,9 @@ static HRESULT WINAPI d3dadapter9_EnumAdapterModes(struct d3dadapter9 *This,
         return D3DERR_INVALIDCALL;
     }
 
-    pMode->Width = ADAPTER_OUTPUT.modes[Mode].Width;
-    pMode->Height = ADAPTER_OUTPUT.modes[Mode].Height;
-    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].RefreshRate;
+    pMode->Width = ADAPTER_OUTPUT.modes[Mode].w;
+    pMode->Height = ADAPTER_OUTPUT.modes[Mode].h;
+    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].refresh_rate;
     pMode->Format = Format;
 
     return D3D_OK;
@@ -330,10 +266,10 @@ static HRESULT WINAPI d3dadapter9_GetAdapterDisplayMode(struct d3dadapter9 *This
     if (Mode < 0)
         return D3DERR_INVALIDCALL;
 
-    pMode->Width = ADAPTER_OUTPUT.modes[Mode].Width;
-    pMode->Height = ADAPTER_OUTPUT.modes[Mode].Height;
-    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].RefreshRate;
-    pMode->Format = ADAPTER_OUTPUT.modes[Mode].Format;
+    pMode->Width = ADAPTER_OUTPUT.modes[Mode].w;
+    pMode->Height = ADAPTER_OUTPUT.modes[Mode].h;
+    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].refresh_rate;
+    pMode->Format = to_d3d_format(ADAPTER_OUTPUT.modes[Mode].format);
 
     return D3D_OK;
 }
@@ -414,19 +350,17 @@ static HRESULT WINAPI d3dadapter9_GetDeviceCaps(struct d3dadapter9 *This,
 static HMONITOR WINAPI d3dadapter9_GetAdapterMonitor(struct d3dadapter9 *This,
         UINT Adapter)
 {
-    if (Adapter >= d3dadapter9_GetAdapterCount(This))
-        return (HMONITOR)0;
-
-    return (HMONITOR)ADAPTER_OUTPUT.monitor;
+    // TODO: stub
+    return (HMONITOR)0;
 }
 
-static HRESULT WINAPI DECLSPEC_HOTPATCH d3dadapter9_CreateDeviceEx(struct d3dadapter9 *This,
+static HRESULT WINAPI d3dadapter9_CreateDeviceEx(struct d3dadapter9 *This,
         UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags,
         D3DPRESENT_PARAMETERS *pPresentationParameters,
         D3DDISPLAYMODEEX *pFullscreenDisplayMode,
         IDirect3DDevice9Ex **ppReturnedDeviceInterface);
 
-static HRESULT WINAPI DECLSPEC_HOTPATCH d3dadapter9_CreateDevice(struct d3dadapter9 *This,
+static HRESULT WINAPI d3dadapter9_CreateDevice(struct d3dadapter9 *This,
         UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags,
         D3DPRESENT_PARAMETERS *pPresentationParameters,
         IDirect3DDevice9 **ppReturnedDeviceInterface)
@@ -474,12 +408,12 @@ static HRESULT WINAPI d3dadapter9_EnumAdapterModesEx(struct d3dadapter9 *This,
         return D3DERR_INVALIDCALL;
     }
 
-    pMode->Size = ADAPTER_OUTPUT.modes[Mode].Size;
-    pMode->Width = ADAPTER_OUTPUT.modes[Mode].Width;
-    pMode->Height = ADAPTER_OUTPUT.modes[Mode].Height;
-    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].RefreshRate;
-    pMode->Format = ADAPTER_OUTPUT.modes[Mode].Format;
-    pMode->ScanLineOrdering = ADAPTER_OUTPUT.modes[Mode].ScanLineOrdering;
+    pMode->Size = sizeof(D3DDISPLAYMODEEX);
+    pMode->Width = ADAPTER_OUTPUT.modes[Mode].w;
+    pMode->Height = ADAPTER_OUTPUT.modes[Mode].h;
+    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].refresh_rate;
+    pMode->Format = to_d3d_format(ADAPTER_OUTPUT.modes[Mode].format);
+    pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
 
     return D3D_OK;
 }
@@ -499,19 +433,19 @@ static HRESULT WINAPI d3dadapter9_GetAdapterDisplayModeEx(struct d3dadapter9 *Th
             return D3DERR_INVALIDCALL;
 
         pMode->Size = sizeof(D3DDISPLAYMODEEX);
-        pMode->Width = ADAPTER_OUTPUT.modes[Mode].Width;
-        pMode->Height = ADAPTER_OUTPUT.modes[Mode].Height;
-        pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].RefreshRate;
-        pMode->Format = ADAPTER_OUTPUT.modes[Mode].Format;
-        pMode->ScanLineOrdering = ADAPTER_OUTPUT.modes[Mode].ScanLineOrdering;
+        pMode->Width = ADAPTER_OUTPUT.modes[Mode].w;
+        pMode->Height = ADAPTER_OUTPUT.modes[Mode].h;
+        pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].refresh_rate;
+        pMode->Format = to_d3d_format(ADAPTER_OUTPUT.modes[Mode].format);
+        pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
     }
     if (pRotation)
-        *pRotation = ADAPTER_OUTPUT.rotation;
+        *pRotation = D3DDISPLAYROTATION_IDENTITY;
 
     return D3D_OK;
 }
 
-static HRESULT WINAPI DECLSPEC_HOTPATCH d3dadapter9_CreateDeviceEx(struct d3dadapter9 *This,
+static HRESULT WINAPI d3dadapter9_CreateDeviceEx(struct d3dadapter9 *This,
         UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags,
         D3DPRESENT_PARAMETERS *pPresentationParameters,
         D3DDISPLAYMODEEX *pFullscreenDisplayMode,
@@ -532,9 +466,9 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3dadapter9_CreateDeviceEx(struct d3dada
         else
             nparams = 1;
 
-        hr = present_create_present_group(This->gdi_display, group->devname,
-                hFocusWindow, pPresentationParameters, nparams, &present, This->ex,
-                BehaviorFlags, group->dri_backend);
+        hr = present_create_present_group(This->gdi_display, hFocusWindow,
+                pPresentationParameters, pFullscreenDisplayMode, nparams,
+                &present, This->ex, BehaviorFlags, group->dri_backend);
     }
 
     if (FAILED(hr))
@@ -563,14 +497,6 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3dadapter9_CreateDeviceEx(struct d3dada
         return hr;
     }
 
-    /* Nine returns different vtables for Ex, non Ex and
-     * if you use the multithread flag or not. This prevents
-     * things like Steam overlay to work, in addition to the problem
-     * that functions nine side are not recognized by wine as
-     * hotpatch-able. If possible, we use our vtable wrapper,
-     * which solves the problem described above. */
-    if (enable_device_vtable_wrapper())
-        (*ppReturnedDeviceInterface)->lpVtbl = get_device_vtable();
     return hr;
 }
 
@@ -590,14 +516,12 @@ static struct adapter_group *add_group(struct d3dadapter9 *This)
         if (This->ngroupsalloc == 0)
         {
             This->ngroupsalloc = 2;
-            r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                    This->ngroupsalloc*sizeof(struct adapter_group));
+            r = calloc(This->ngroupsalloc, sizeof(struct adapter_group));
         }
         else
         {
             This->ngroupsalloc <<= 1;
-            r = HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, This->groups,
-                    This->ngroupsalloc*sizeof(struct adapter_group));
+            r = realloc(This->groups, This->ngroupsalloc*sizeof(struct adapter_group));
         }
 
         if (!r)
@@ -615,9 +539,9 @@ static void remove_group(struct d3dadapter9 *This)
 
     for (i = 0; i < group->noutputs; ++i)
     {
-        HeapFree(GetProcessHeap(), 0, group->outputs[i].modes);
+        free(group->outputs[i].modes);
     }
-    HeapFree(GetProcessHeap(), 0, group->outputs);
+    free(group->outputs);
 
     backend_destroy(group->dri_backend);
 
@@ -636,14 +560,12 @@ static struct output *add_output(struct d3dadapter9 *This)
         if (group->noutputsalloc == 0)
         {
             group->noutputsalloc = 2;
-            r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                    group->noutputsalloc*sizeof(struct output));
+            r = calloc(group->noutputsalloc, sizeof(struct output));
         }
         else
         {
             group->noutputsalloc <<= 1;
-            r = HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, group->outputs,
-                    group->noutputsalloc*sizeof(struct output));
+            r = realloc(group->outputs, group->noutputsalloc*sizeof(struct output));
         }
 
         if (!r)
@@ -659,13 +581,13 @@ static void remove_output(struct d3dadapter9 *This)
     struct adapter_group *group = &This->groups[This->ngroups-1];
     struct output *out = &group->outputs[group->noutputs-1];
 
-    HeapFree(GetProcessHeap(), 0, out->modes);
+    free(out->modes);
 
     ZeroMemory(out, sizeof(struct output));
     group->noutputs--;
 }
 
-static D3DDISPLAYMODEEX *add_mode(struct d3dadapter9 *This)
+static SDL_DisplayMode *add_mode(struct d3dadapter9 *This)
 {
     struct adapter_group *group = &This->groups[This->ngroups-1];
     struct output *out = &group->outputs[group->noutputs-1];
@@ -677,14 +599,12 @@ static D3DDISPLAYMODEEX *add_mode(struct d3dadapter9 *This)
         if (out->nmodesalloc == 0)
         {
             out->nmodesalloc = 8;
-            r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                    out->nmodesalloc*sizeof(struct D3DDISPLAYMODEEX));
+            r = calloc(out->nmodesalloc, sizeof(struct D3DDISPLAYMODEEX));
         }
         else
         {
             out->nmodesalloc <<= 1;
-            r = HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, out->modes,
-                    out->nmodesalloc*sizeof(struct D3DDISPLAYMODEEX));
+            r = realloc(out->modes, out->nmodesalloc*sizeof(struct D3DDISPLAYMODEEX));
         }
 
         if (!r)
@@ -704,21 +624,11 @@ static void remove_mode(struct d3dadapter9 *This)
 
 static HRESULT fill_groups(struct d3dadapter9 *This)
 {
-    DISPLAY_DEVICEW dd;
-    DEVMODEW dm;
-    POINT pt;
-    HDC hdc;
     HRESULT hr;
     int i, j, k;
 
-    const WCHAR wdisp[] = {'D','I','S','P','L','A','Y',0};
-
-    ZeroMemory(&dd, sizeof(dd));
-    ZeroMemory(&dm, sizeof(dm));
-    dd.cb = sizeof(dd);
-    dm.dmSize = sizeof(dm);
-
-    for (i = 0; EnumDisplayDevicesW(NULL, i, &dd, 0); ++i)
+    // TODO: Multiple adapters
+    for (i = 0; i < 1; ++i)
     {
         struct adapter_group *group = add_group(This);
         if (!group)
@@ -727,133 +637,48 @@ static HRESULT fill_groups(struct d3dadapter9 *This)
             return E_OUTOFMEMORY;
         }
 
-        hdc = CreateDCW(wdisp, dd.DeviceName, NULL, NULL);
-        if (!hdc)
-        {
-            remove_group(This);
-            WARN("Unable to create DC for display %d.\n", i);
-            goto end_group;
-        }
-
         group->dri_backend = backend_create(This->gdi_display, DefaultScreen(This->gdi_display));
         if (!group->dri_backend)
         {
             ERR("Unable to open backend for display %d.\n", i);
-            goto end_group;
+            continue;
         }
 
-        hr = present_create_adapter9(This->gdi_display, hdc, group->dri_backend,
-               &group->adapter);
-
-        DeleteDC(hdc);
+        hr = present_create_adapter9(group->dri_backend, &group->adapter);
         if (FAILED(hr))
         {
             remove_group(This);
-            goto end_group;
+            continue;
         }
 
-        CopyMemory(group->devname, dd.DeviceName, sizeof(group->devname));
-        for (j = 0; EnumDisplayDevicesW(group->devname, j, &dd, 0); ++j)
+        for (j = 0; j < SDL_GetNumVideoDisplays(); ++j)
         {
             struct output *out = add_output(This);
-            boolean orient = FALSE, monit = FALSE;
             if (!out)
             {
                 ERR("Out of memory.\n");
                 return E_OUTOFMEMORY;
             }
 
-            for (k = 0; EnumDisplaySettingsExW(group->devname, k, &dm, 0); ++k)
+            for (k = 0; k < SDL_GetNumDisplayModes(j); ++k)
             {
-                D3DDISPLAYMODEEX *mode = add_mode(This);
+                SDL_DisplayMode *mode = add_mode(This);
                 if (!out)
                 {
                     ERR("Out of memory.\n");
                     return E_OUTOFMEMORY;
                 }
 
-                mode->Size = sizeof(D3DDISPLAYMODEEX);
-                mode->Width = dm.dmPelsWidth;
-                mode->Height = dm.dmPelsHeight;
-                mode->RefreshRate = dm.dmDisplayFrequency;
-                mode->ScanLineOrdering =
-                        (dm.dmDisplayFlags & DM_INTERLACED) ?
-                        D3DSCANLINEORDERING_INTERLACED :
-                        D3DSCANLINEORDERING_PROGRESSIVE;
-
-                switch (dm.dmBitsPerPel)
+                if (SDL_GetDisplayMode(j, k, mode) < 0)
                 {
-                    case 32: mode->Format = D3DFMT_X8R8G8B8; break;
-                    case 24: mode->Format = D3DFMT_R8G8B8; break;
-                    case 16: mode->Format = D3DFMT_R5G6B5; break;
-                    case 8:
-                        remove_mode(This);
-                        goto end_mode;
-
-                    default:
-                        remove_mode(This);
-                        WARN("Unknown format (%u bpp) in display %d, monitor "
-                             "%d, mode %d.\n", dm.dmBitsPerPel, i, j, k);
-                        goto end_mode;
+                    remove_output(This);
+                    WARN("Unable to get display mode for display %d, mode %d.\n", j, k);
                 }
 
-                if (!orient)
-                {
-                    switch (dm.dmDisplayOrientation)
-                    {
-                        case DMDO_DEFAULT:
-                            out->rotation = D3DDISPLAYROTATION_IDENTITY;
-                            break;
-
-                        case DMDO_90:
-                            out->rotation = D3DDISPLAYROTATION_90;
-                            break;
-
-                        case DMDO_180:
-                            out->rotation = D3DDISPLAYROTATION_180;
-                            break;
-
-                        case DMDO_270:
-                            out->rotation = D3DDISPLAYROTATION_270;
-                            break;
-
-                        default:
-                            remove_output(This);
-                            WARN("Unknown display rotation in display %d, "
-                                 "monitor %d\n", i, j);
-                            goto end_output;
-                    }
-                    orient = TRUE;
-                }
-
-                if (!monit)
-                {
-                    pt.x = dm.dmPosition.x;
-                    pt.y = dm.dmPosition.y;
-                    out->monitor = MonitorFromPoint(pt, 0);
-                    if (!out->monitor)
-                    {
-                        remove_output(This);
-                        WARN("Unable to get monitor handle for display %d, "
-                             "monitor %d.\n", i, j);
-                        goto end_output;
-                    }
-                    monit = TRUE;
-                }
-
-end_mode:
-                ZeroMemory(&dm, sizeof(dm));
-                dm.dmSize = sizeof(dm);
+                TRACE("format=%s, w=%d, h=%d, refresh_rate=%d\n",
+                        SDL_GetPixelFormatName(mode->format), mode->w, mode->h, mode->refresh_rate);
             }
-
-end_output:
-            ZeroMemory(&dd, sizeof(dd));
-            dd.cb = sizeof(dd);
         }
-
-end_group:
-        ZeroMemory(&dd, sizeof(dd));
-        dd.cb = sizeof(dd);
     }
 
     return D3D_OK;
@@ -884,13 +709,13 @@ static IDirect3D9ExVtbl d3dadapter9_vtable = {
     (void *)d3dadapter9_GetAdapterLUID
 };
 
-HRESULT d3dadapter9_new(Display *gdi_display, boolean ex, IDirect3D9Ex **ppOut)
+HRESULT d3dadapter9_new(Display *gdi_display, BOOL ex, IDirect3D9Ex **ppOut)
 {
     struct d3dadapter9 *This;
     HRESULT hr;
     unsigned i, j, k;
 
-    This = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(struct d3dadapter9));
+    This = calloc(1, sizeof(struct d3dadapter9));
     if (!This)
     {
         ERR("Out of memory.\n");
@@ -930,8 +755,7 @@ HRESULT d3dadapter9_new(Display *gdi_display, boolean ex, IDirect3D9Ex **ppOut)
         return D3DERR_NOTAVAILABLE;
     }
 
-    This->map = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            This->nadapters * sizeof(struct adapter_map));
+    This->map = calloc(This->nadapters, sizeof(struct adapter_map));
 
     if (!This->map)
     {
@@ -949,9 +773,6 @@ HRESULT d3dadapter9_new(Display *gdi_display, boolean ex, IDirect3D9Ex **ppOut)
     }
 
     *ppOut = (IDirect3D9Ex *)This;
-
-    fprintf(stderr, "\033[1;32mNative Direct3D 9 " NINE_VERSION " is active.\n"
-                    "For more information visit " NINE_URL "\033[0m\n");
 
     return D3D_OK;
 }

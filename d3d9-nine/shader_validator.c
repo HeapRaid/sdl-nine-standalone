@@ -5,13 +5,14 @@
  * Copyright 2016 Patrick Rudolph
  */
 
-#include <windows.h>
+#include <d3d9types.h>
+#include <stdlib.h>
 
 #include "../common/debug.h"
 #include "shader_validator.h"
 
 static HRESULT WINAPI IDirect3DShaderValidator9Impl_QueryInterface(IDirect3DShaderValidator9Impl *This,
-        REFIID riid, LPVOID* ppobj)
+        REFIID riid, void** ppobj)
 {
     /* TODO: AddRef(iface). */
     *ppobj = This;
@@ -34,7 +35,7 @@ static ULONG WINAPI IDirect3DShaderValidator9Impl_Release(IDirect3DShaderValidat
     TRACE("This=%p decreasing refcount to %u.\n", This, ref);
 
     if (ref == 0)
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This);
 
     return ref;
 }

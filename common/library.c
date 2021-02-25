@@ -6,10 +6,10 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "../common/debug.h"
 #include "library.h"
-#include "registry.h"
 
 #define D3DADAPTER9 "d3dadapter9.so.1"
 
@@ -17,7 +17,7 @@ static void *open_d3dadapter(char *paths, char **res, char **err)
 {
     char *next, *end, *p, *lasterr = NULL;
     void *handle = NULL;
-    char path[MAX_PATH];
+    char path[4096];
     struct stat st;
     int len;
 
@@ -68,7 +68,7 @@ static void *open_d3dadapter(char *paths, char **res, char **err)
 void *common_load_d3dadapter(char **path, char **err)
 {
     static void *handle = NULL;
-    char *env, *reg;
+    char *env;
 
     env = getenv("D3D_MODULE_PATH");
     if (env)
@@ -77,18 +77,6 @@ void *common_load_d3dadapter(char **path, char **err)
 
         if (!handle)
             ERR("Failed to load " D3DADAPTER9 " set by D3D_MODULE_PATH (%s)\n", env);
-
-        return handle;
-    }
-
-    if (common_get_registry_string(reg_path_nine, reg_key_module_path, &reg))
-    {
-        handle = open_d3dadapter(reg, path, err);
-
-        if (!handle)
-            ERR("Failed to load " D3DADAPTER9 " set by ModulePath (%s)\n", reg);
-
-        HeapFree(GetProcessHeap(), 0, reg);
 
         return handle;
     }
@@ -113,8 +101,7 @@ void *common_load_d3dadapter(char **path, char **err)
 
     if (!handle)
         ERR(D3DADAPTER9 " was not found on your system.\n"
-            "Setting the envvar D3D_MODULE_PATH or "
-            "regkey Software\\Wine\\Direct3DNine\\ModulePath is required\n");
+            "Setting the envvar D3D_MODULE_PATH is required\n");
 
     return handle;
 #endif

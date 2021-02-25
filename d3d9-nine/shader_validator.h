@@ -8,7 +8,7 @@
 #ifndef __NINE_SHADER_VALIDATOR_H
 #define __NINE_SHADER_VALIDATOR_H
 
-#include <windef.h>
+#include <d3d9types.h>
 
 typedef struct IDirect3DShaderValidator9Impl
 {

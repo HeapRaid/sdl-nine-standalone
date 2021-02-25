@@ -9,7 +9,7 @@
 #ifndef __NINE_XCB_PRESENT_H
 #define __NINE_XCB_PRESENT_H
 
-#include <wingdi.h>
+#include <d3d9types.h>
 #include <X11/Xlib.h>
 
 LONG PRESENTGetNewSerial(void);

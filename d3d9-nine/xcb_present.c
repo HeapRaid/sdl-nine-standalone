@@ -6,12 +6,14 @@
  * Copyright 2015-2019 Patrick Rudolph
  */
 
-#include <windows.h>
+#include <d3d9types.h>
 #include <X11/Xlib-xcb.h>
 #include <xcb/present.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
+#include <SDL2/SDL.h>
 
 #include "../common/debug.h"
 #include "xcb_present.h"
@@ -27,8 +29,8 @@ struct PRESENTPriv {
     int pixmap_present_pending;
     BOOL idle_notify_since_last_check;
     BOOL notify_with_serial_pending;
-    CRITICAL_SECTION mutex_present; /* protect readind/writing present_priv things */
-    CRITICAL_SECTION mutex_xcb_wait;
+    SDL_mutex* mutex_present; /* protect readind/writing present_priv things */
+    SDL_mutex* mutex_xcb_wait;
     BOOL xcb_wait;
 };
 
@@ -190,14 +192,14 @@ static BOOL PRESENTwait_events(PRESENTpriv *present_priv, BOOL allow_other_threa
     if (allow_other_threads)
     {
         present_priv->xcb_wait = TRUE;
-        EnterCriticalSection(&present_priv->mutex_xcb_wait);
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_LockMutex(present_priv->mutex_xcb_wait);
+        SDL_UnlockMutex(present_priv->mutex_present);
     }
     ev = xcb_wait_for_special_event(present_priv->xcb_connection, present_priv->special_event);
     if (allow_other_threads)
     {
-        LeaveCriticalSection(&present_priv->mutex_xcb_wait);
-        EnterCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_xcb_wait);
+        SDL_LockMutex(present_priv->mutex_present);
         present_priv->xcb_wait = FALSE;
     }
     if (!ev)
@@ -227,7 +229,7 @@ static struct xcb_connection_t *create_xcb_connection(Display *dpy)
 
 BOOL PRESENTInit(Display *dpy, PRESENTpriv **present_priv)
 {
-    *present_priv = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(PRESENTpriv));
+    *present_priv = calloc(1, sizeof(PRESENTpriv));
 
     if (!*present_priv)
         return FALSE;
@@ -235,8 +237,8 @@ BOOL PRESENTInit(Display *dpy, PRESENTpriv **present_priv)
     (*present_priv)->xcb_connection = create_xcb_connection(dpy);
     (*present_priv)->xcb_connection_bis = create_xcb_connection(dpy);
 
-    InitializeCriticalSection(&(*present_priv)->mutex_present);
-    InitializeCriticalSection(&(*present_priv)->mutex_xcb_wait);
+    (*present_priv)->mutex_present = SDL_CreateMutex();
+    (*present_priv)->mutex_xcb_wait = SDL_CreateMutex();
     return TRUE;
 }
 
@@ -254,8 +256,8 @@ static void PRESENTForceReleases(PRESENTpriv *present_priv)
     {
         xcb_present_notify_msc(present_priv->xcb_connection, present_priv->window, 0, 0, 0, 0);
         xcb_flush(present_priv->xcb_connection);
-        EnterCriticalSection(&present_priv->mutex_xcb_wait);
-        LeaveCriticalSection(&present_priv->mutex_xcb_wait);
+        SDL_LockMutex(present_priv->mutex_xcb_wait);
+        SDL_UnlockMutex(present_priv->mutex_xcb_wait);
         /* the problem here is that we don't have access to the event the other thread got.
          * It is either presented event, idle event or notify event.
          */
@@ -387,7 +389,7 @@ void PRESENTDestroy(PRESENTpriv *present_priv)
 {
     PRESENTPixmapPriv *current = NULL;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     PRESENTForceReleases(present_priv);
 
@@ -396,7 +398,7 @@ void PRESENTDestroy(PRESENTpriv *present_priv)
     {
         PRESENTPixmapPriv *next = current->next;
         PRESENTDestroyPixmapContent(current);
-        HeapFree(GetProcessHeap(), 0, current);
+        free(current);
         current = next;
     }
 
@@ -404,11 +406,11 @@ void PRESENTDestroy(PRESENTpriv *present_priv)
 
     xcb_disconnect(present_priv->xcb_connection);
     xcb_disconnect(present_priv->xcb_connection_bis);
-    LeaveCriticalSection(&present_priv->mutex_present);
-    DeleteCriticalSection(&present_priv->mutex_present);
-    DeleteCriticalSection(&present_priv->mutex_xcb_wait);
+    SDL_UnlockMutex(present_priv->mutex_present);
+    SDL_DestroyMutex(present_priv->mutex_present);
+    SDL_DestroyMutex(present_priv->mutex_xcb_wait);
 
-    HeapFree(GetProcessHeap(), 0, present_priv);
+    free(present_priv);
 }
 
 BOOL PRESENTPixmapCreate(PRESENTpriv *present_priv, int screen,
@@ -423,12 +425,12 @@ BOOL PRESENTPixmapCreate(PRESENTpriv *present_priv, int screen,
           " depth=%d, bpp=%d\n", present_priv, pixmap, width, height,
           stride, depth, bpp);
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     xcb_screen = screen_of_display (present_priv->xcb_connection, screen);
     if (!xcb_screen || !xcb_screen->root)
     {
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_present);
         return FALSE;
     }
 
@@ -438,7 +440,7 @@ BOOL PRESENTPixmapCreate(PRESENTpriv *present_priv, int screen,
                                *pixmap, xcb_screen->root, width, height);
 
     error = xcb_request_check(present_priv->xcb_connection, cookie);
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
 
     if (error)
         return FALSE;
@@ -456,14 +458,14 @@ BOOL PRESENTPixmapInit(PRESENTpriv *present_priv, Pixmap pixmap, PRESENTPixmapPr
     if (!reply)
         return FALSE;
 
-    *present_pixmap_priv = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(PRESENTPixmapPriv));
+    *present_pixmap_priv = calloc(1, sizeof(PRESENTPixmapPriv));
 
     if (!*present_pixmap_priv)
     {
         free(reply);
         return FALSE;
     }
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     (*present_pixmap_priv)->released = TRUE;
     (*present_pixmap_priv)->pixmap = pixmap;
@@ -477,7 +479,7 @@ BOOL PRESENTPixmapInit(PRESENTpriv *present_priv, Pixmap pixmap, PRESENTPixmapPr
     (*present_pixmap_priv)->serial = PRESENTGetNewSerial();
     present_priv->first_present_priv = *present_pixmap_priv;
 
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return TRUE;
 }
 
@@ -486,11 +488,11 @@ BOOL PRESENTTryFreePixmap(PRESENTPixmapPriv *present_pixmap_priv)
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     PRESENTPixmapPriv *current;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     if (!present_pixmap_priv->released || present_pixmap_priv->present_complete_pending)
     {
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_present);
         TRACE("Releasing pixmap priv %p later\n", present_pixmap_priv);
         return FALSE;
     }
@@ -507,8 +509,8 @@ BOOL PRESENTTryFreePixmap(PRESENTPixmapPriv *present_pixmap_priv)
     current->next = present_pixmap_priv->next;
 free_priv:
     PRESENTDestroyPixmapContent(present_pixmap_priv);
-    HeapFree(GetProcessHeap(), 0, present_pixmap_priv);
-    LeaveCriticalSection(&present_priv->mutex_present);
+    free(present_pixmap_priv);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return TRUE;
 }
 
@@ -520,11 +522,11 @@ BOOL PRESENTHelperCopyFront(PRESENTPixmapPriv *present_pixmap_priv)
     uint32_t v = 0;
     xcb_gcontext_t gc;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     if (!present_priv->window)
     {
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_present);
         return FALSE;
     }
 
@@ -538,7 +540,7 @@ BOOL PRESENTHelperCopyFront(PRESENTPixmapPriv *present_pixmap_priv)
 
     error = xcb_request_check(present_priv->xcb_connection, cookie);
     xcb_free_gc(present_priv->xcb_connection, gc);
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return (error != NULL);
 }
 
@@ -546,7 +548,7 @@ BOOL PRESENTPixmapPrepare(XID window, PRESENTPixmapPriv *present_pixmap_priv)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     if (window != present_priv->window)
         PRESENTPrivChangeWindow(present_priv, window);
@@ -554,7 +556,7 @@ BOOL PRESENTPixmapPrepare(XID window, PRESENTPixmapPriv *present_pixmap_priv)
     if (!window)
     {
         ERR("ERROR: Try to Present a pixmap on a NULL window\n");
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_present);
         return FALSE;
     }
 
@@ -565,11 +567,11 @@ BOOL PRESENTPixmapPrepare(XID window, PRESENTPixmapPriv *present_pixmap_priv)
     if (!present_pixmap_priv->released)
     {
         ERR("FATAL ERROR: Trying to Present a pixmap not released\n");
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_present);
         return FALSE;
     }
 
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return TRUE;
 }
 
@@ -585,7 +587,7 @@ BOOL PRESENTPixmap(XID window, PRESENTPixmapPriv *present_pixmap_priv,
     int16_t x_off, y_off;
     uint32_t options = XCB_PRESENT_OPTION_NONE;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     target_msc = present_priv->last_msc;
 
@@ -645,8 +647,7 @@ BOOL PRESENTPixmap(XID window, PRESENTPixmapPriv *present_pixmap_priv,
         xcb_xfixes_create_region(present_priv->xcb_connection_bis, valid, 1, &rect_update);
         if (pDirtyRegion && pDirtyRegion->rdh.nCount)
         {
-            rect_updates = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                    sizeof(xcb_rectangle_t) * pDirtyRegion->rdh.nCount);
+            rect_updates = calloc(pDirtyRegion->rdh.nCount, sizeof(xcb_rectangle_t));
 
             for (i = 0; i < pDirtyRegion->rdh.nCount; i++)
             {
@@ -659,7 +660,7 @@ BOOL PRESENTPixmap(XID window, PRESENTPixmapPriv *present_pixmap_priv,
                 memcpy(rect_updates + i * sizeof(xcb_rectangle_t), &rect_update, sizeof(xcb_rectangle_t));
             }
             xcb_xfixes_create_region(present_priv->xcb_connection_bis, update, pDirtyRegion->rdh.nCount, rect_updates);
-            HeapFree(GetProcessHeap(), 0, rect_updates);
+            free(rect_updates);
         } else
             xcb_xfixes_create_region(present_priv->xcb_connection_bis, update, 1, &rect_update);
     }
@@ -687,7 +688,7 @@ BOOL PRESENTPixmap(XID window, PRESENTPixmapPriv *present_pixmap_priv,
         if (!reply)
         {
             ERR("Error querying window info. Perhaps it doesn't exist anymore\n");
-            LeaveCriticalSection(&present_priv->mutex_present);
+            SDL_UnlockMutex(present_priv->mutex_present);
             return FALSE;
         }
         ERR("Pixmap: width=%d, height=%d, depth=%d\n",
@@ -704,14 +705,14 @@ BOOL PRESENTPixmap(XID window, PRESENTPixmapPriv *present_pixmap_priv,
         if (present_pixmap_priv->depth != reply->depth)
             ERR("Depths are different. PRESENT needs the pixmap and the window have same depth\n");
         free(reply);
-        LeaveCriticalSection(&present_priv->mutex_present);
+        SDL_UnlockMutex(present_priv->mutex_present);
         return FALSE;
     }
     present_priv->last_target = target_msc;
     present_priv->pixmap_present_pending++;
     present_pixmap_priv->present_complete_pending++;
     present_pixmap_priv->released = FALSE;
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return TRUE;
 }
 
@@ -719,7 +720,7 @@ BOOL PRESENTWaitPixmapReleased(PRESENTPixmapPriv *present_pixmap_priv)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     PRESENTflush_events(present_priv, FALSE);
 
@@ -733,20 +734,20 @@ BOOL PRESENTWaitPixmapReleased(PRESENTPixmapPriv *present_pixmap_priv)
         if (present_priv->xcb_wait)
         {
             /* we allow only one thread to dispatch events */
-            EnterCriticalSection(&present_priv->mutex_xcb_wait);
+            SDL_LockMutex(present_priv->mutex_xcb_wait);
             /* here the other thread got an event but hasn't treated it yet */
-            LeaveCriticalSection(&present_priv->mutex_xcb_wait);
-            LeaveCriticalSection(&present_priv->mutex_present);
-            Sleep(10); /* Let it treat the event */
-            EnterCriticalSection(&present_priv->mutex_present);
+            SDL_UnlockMutex(present_priv->mutex_xcb_wait);
+            SDL_UnlockMutex(present_priv->mutex_present);
+            SDL_Delay(10); /* Let it treat the event */
+            SDL_LockMutex(present_priv->mutex_present);
         }
         else if (!PRESENTwait_events(present_priv, TRUE))
         {
-            LeaveCriticalSection(&present_priv->mutex_present);
+            SDL_UnlockMutex(present_priv->mutex_present);
             return FALSE;
         }
     }
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return TRUE;
 }
 
@@ -755,20 +756,20 @@ BOOL PRESENTIsPixmapReleased(PRESENTPixmapPriv *present_pixmap_priv)
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     BOOL ret;
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     PRESENTflush_events(present_priv, FALSE);
 
     ret = present_pixmap_priv->released;
 
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return ret;
 }
 
 BOOL PRESENTWaitReleaseEvent(PRESENTpriv *present_priv)
 {
 
-    EnterCriticalSection(&present_priv->mutex_present);
+    SDL_LockMutex(present_priv->mutex_present);
 
     while (!present_priv->idle_notify_since_last_check)
     {
@@ -778,22 +779,22 @@ BOOL PRESENTWaitReleaseEvent(PRESENTpriv *present_priv)
         if (present_priv->xcb_wait)
         {
             /* we allow only one thread to dispatch events */
-            EnterCriticalSection(&present_priv->mutex_xcb_wait);
+            SDL_LockMutex(present_priv->mutex_xcb_wait);
             /* here the other thread got an event but hasn't treated it yet */
-            LeaveCriticalSection(&present_priv->mutex_xcb_wait);
-            LeaveCriticalSection(&present_priv->mutex_present);
-            Sleep(10); /* Let it treat the event */
-            EnterCriticalSection(&present_priv->mutex_present);
+            SDL_UnlockMutex(present_priv->mutex_xcb_wait);
+            SDL_UnlockMutex(present_priv->mutex_present);
+            SDL_Delay(10); /* Let it treat the event */
+            SDL_LockMutex(present_priv->mutex_present);
         }
         else if (!PRESENTwait_events(present_priv, TRUE))
         {
             ERR("Issue in PRESENTWaitReleaseEvent\n");
-            LeaveCriticalSection(&present_priv->mutex_present);
+            SDL_UnlockMutex(present_priv->mutex_present);
             return FALSE;
         }
     }
     present_priv->idle_notify_since_last_check = FALSE;
 
-    LeaveCriticalSection(&present_priv->mutex_present);
+    SDL_UnlockMutex(present_priv->mutex_present);
     return TRUE;
 }

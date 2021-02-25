@@ -10,24 +10,37 @@
 
 #include <d3d9.h>
 #include <fcntl.h>
+#include <stdlib.h>
+#include <SDL2/SDL.h>
 
 #include "../common/debug.h"
 #include "d3dadapter9.h"
-#include "wndproc.h"
 #include "shader_validator.h"
 
 static int D3DPERF_event_level = 0;
-static Display *gdi_display;
 
 void WINAPI DebugSetMute(void)
 {
     /* nothing to do */
 }
 
-IDirect3D9 * WINAPI DECLSPEC_HOTPATCH Direct3DCreate9(UINT sdk_version)
+IDirect3D9 * WINAPI Direct3DCreate9(UINT sdk_version)
 {
     IDirect3D9 *native;
+    Display* gdi_display;
     TRACE("sdk_version %#x.\n", sdk_version);
+
+    if (!SDL_WasInit(SDL_INIT_VIDEO))
+    {
+        ERR("Initialize SDL with the video subsystem before D3D9.\n");
+        return NULL;
+    }
+
+    if (!(gdi_display = XOpenDisplay( NULL )))
+    {
+        ERR("Failed to open display.\n");
+        return NULL;
+    }
 
     if (SUCCEEDED(d3dadapter9_new(gdi_display, FALSE, (IDirect3D9Ex **)&native)))
         return native;
@@ -35,10 +48,22 @@ IDirect3D9 * WINAPI DECLSPEC_HOTPATCH Direct3DCreate9(UINT sdk_version)
     return NULL;
 }
 
-HRESULT WINAPI DECLSPEC_HOTPATCH Direct3DCreate9Ex(UINT sdk_version, IDirect3D9Ex **d3d9ex)
+HRESULT WINAPI Direct3DCreate9Ex(UINT sdk_version, IDirect3D9Ex **d3d9ex)
 {
+    Display* gdi_display;
     TRACE("sdk_version %#x, d3d9ex %p.\n", sdk_version, d3d9ex);
 
+    if (!SDL_WasInit(SDL_INIT_VIDEO))
+    {
+        ERR("Initialize SDL with the video subsystem before D3D9.\n");
+        return D3DERR_INVALIDCALL;
+    }
+
+    if (!(gdi_display = XOpenDisplay( NULL )))
+    {
+        ERR("Failed to open display\n");
+        return D3DERR_INVALIDDEVICE;
+    }
     return d3dadapter9_new(gdi_display, TRUE, d3d9ex);
 }
 
@@ -52,8 +77,7 @@ HRESULT WINAPI DECLSPEC_HOTPATCH Direct3DCreate9Ex(UINT sdk_version, IDirect3D9E
 void* WINAPI Direct3DShaderValidatorCreate9(void)
 {
     IDirect3DShaderValidator9Impl* object =
-            HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                    sizeof(IDirect3DShaderValidator9Impl));
+            calloc(1, sizeof(IDirect3DShaderValidator9Impl));
 
     object->lpVtbl = &IDirect3DShaderValidator9Vtbl;
     object->ref = 1;
@@ -62,39 +86,12 @@ void* WINAPI Direct3DShaderValidatorCreate9(void)
     return (void*) object;
 }
 
-/*******************************************************************
- *       DllMain
- */
-BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
-{
-    switch (reason)
-    {
-        case DLL_PROCESS_ATTACH:
-            if (!(gdi_display = XOpenDisplay( NULL )))
-            {
-                ERR("Failed to open display\n");
-                return FALSE;
-            }
-
-            fcntl( ConnectionNumber(gdi_display), F_SETFD, 1 ); /* set close on exec flag */
-
-            nine_dll_init(inst);
-            break;
-        case DLL_PROCESS_DETACH:
-            if (!reserved)
-                return nine_dll_destroy(inst);
-            break;
-    }
-
-    return TRUE;
-}
-
 /***********************************************************************
  *              D3DPERF_BeginEvent (D3D9.@)
  */
-int WINAPI D3DPERF_BeginEvent(D3DCOLOR color, const WCHAR *name)
+int WINAPI D3DPERF_BeginEvent(D3DCOLOR color, const wchar_t *name)
 {
-    TRACE("color 0x%08x, name %s.\n", color, nine_dbgstr_w(name));
+    TRACE("color 0x%08x, name %ls.\n", color, name);
 
     return D3DPERF_event_level++;
 }
@@ -141,15 +138,15 @@ BOOL WINAPI D3DPERF_QueryRepeatFrame(void)
 /***********************************************************************
  *              D3DPERF_SetMarker (D3D9.@)
  */
-void WINAPI D3DPERF_SetMarker(D3DCOLOR color, const WCHAR *name)
+void WINAPI D3DPERF_SetMarker(D3DCOLOR color, const wchar_t *name)
 {
-    FIXME("color 0x%08x, name %s stub!\n", color, nine_dbgstr_w(name));
+    FIXME("color 0x%08x, name %ls stub!\n", color, name);
 }
 
 /***********************************************************************
  *              D3DPERF_SetRegion (D3D9.@)
  */
-void WINAPI D3DPERF_SetRegion(D3DCOLOR color, const WCHAR *name)
+void WINAPI D3DPERF_SetRegion(D3DCOLOR color, const wchar_t *name)
 {
-    FIXME("color 0x%08x, name %s stub!\n", color, nine_dbgstr_w(name));
+    FIXME("color 0x%08x, name %ls stub!\n", color, name);
 }

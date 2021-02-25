@@ -6,7 +6,7 @@
  * Copyright 2015 Patrick Rudolph
  */
 
-#include <windows.h>
+#include <d3d9types.h>
 #include <X11/Xlib-xcb.h>
 #include <xcb/dri3.h>
 #include <fcntl.h>
@@ -49,7 +49,7 @@ static BOOL dri3_create(Display *dpy, int screen, struct dri_backend_priv **priv
 
     free(reply);
 
-    p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(struct dri3_priv));
+    p = calloc(1, sizeof(struct dri3_priv));
     if (!p)
     {
         close(fd);
@@ -71,7 +71,7 @@ static void dri3_destroy(struct dri_backend_priv *priv)
 
     close(p->fd);
 
-    HeapFree(GetProcessHeap(), 0, p);
+    free(p);
 }
 
 static BOOL dri3_init(struct dri_backend_priv *priv)
@@ -106,8 +106,7 @@ static BOOL dri3_window_buffer_from_dmabuf(struct dri_backend_priv *priv,
     if (!out)
         goto err;
 
-    *out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(struct D3DWindowBuffer));
+    *out = calloc(1, sizeof(struct D3DWindowBuffer));
     if (!*out)
         goto err;
 
@@ -125,7 +124,7 @@ static BOOL dri3_window_buffer_from_dmabuf(struct dri_backend_priv *priv,
     if (!PRESENTPixmapInit(present_priv, pixmap, &((*out)->present_pixmap_priv)))
     {
         ERR("PRESENTPixmapInit failed\n");
-        HeapFree(GetProcessHeap(), 0, *out);
+        free(*out);
         return FALSE;
     }
 
@@ -134,7 +133,7 @@ static BOOL dri3_window_buffer_from_dmabuf(struct dri_backend_priv *priv,
 err:
     ERR("dri3_window_buffer_from_dmabuf failed\n");
     if (out)
-        HeapFree(GetProcessHeap(), 0, *out);
+        free(*out);
     return FALSE;
 }
 

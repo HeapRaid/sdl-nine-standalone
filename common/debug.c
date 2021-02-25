@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "debug.h"
 
@@ -71,20 +72,5 @@ static void nine_dbg_init()
     /* new style debug mask */
     env = getenv("D3D_DEBUG");
     if (env)
-    {
         __nine_debug_flags = strtol(env, NULL, 0);
-        return;
-    }
-
-    /* fallback to old style WINE debug channel */
-    env = getenv("WINEDEBUG");
-    if (!env)
-        return;
-
-    /* just the most basic version, no support for classes */
-    if (strstr(env, "d3d9nine"))
-        __nine_debug_flags = (1 << __NINE_DBCL_FIXME) |
-                             (1 << __NINE_DBCL_ERR) |
-                             (1 << __NINE_DBCL_WARN) |
-                             (1 << __NINE_DBCL_TRACE);
 }

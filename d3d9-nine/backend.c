@@ -7,12 +7,12 @@
  * Copyright 2015-2019 Patrick Rudolph
  */
 
-#include <windows.h>
+#include <d3d9types.h>
 #include <X11/Xlib-xcb.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../common/debug.h"
-#include "../common/registry.h"
 #include "backend.h"
 #include "xcb_present.h"
 
@@ -100,7 +100,7 @@ struct dri_backend *backend_create(Display *dpy, int screen)
 
     TRACE("dpy=%p screen=%d\n", dpy, screen);
 
-    dri_backend = HeapAlloc(GetProcessHeap(), 0, sizeof(struct dri_backend));
+    dri_backend = malloc(sizeof(struct dri_backend));
     if (!dri_backend)
         return NULL;
 
@@ -128,7 +128,7 @@ struct dri_backend *backend_create(Display *dpy, int screen)
         ERR("Error creating backend %s\n", backends[i]->name);
     }
 
-    HeapFree(GetProcessHeap(), 0, dri_backend);
+    free(dri_backend);
     return NULL;
 }
 
@@ -142,5 +142,5 @@ void backend_destroy(struct dri_backend *dri_backend)
     if (dri_backend->priv)
         dri_backend->funcs->destroy(dri_backend->priv);
 
-    HeapFree(GetProcessHeap(), 0, dri_backend);
+    free(dri_backend);
 }

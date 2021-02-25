@@ -1,8 +1,5 @@
-Gallium Nine Standalone |buildstate|
+Gallium Nine SDL
 ====================================
-
-.. |buildstate| image:: https://travis-ci.com/iXit/wine-nine-standalone.svg?branch=master
-    :target: https://travis-ci.com/iXit/wine-nine-standalone
 
 .. image:: https://wiki.ixit.cz/_media/gallium-nine.png
     :target: https://wiki.ixit.cz/d3d9
@@ -11,24 +8,9 @@ About
 -----
 Gallium Nine allows to run any Direct3D 9 application with nearly no CPU overhead, which provides a smoother gaming experience and increased FPS.
 
-Gallium Nine Standalone, as the name implies, is a standalone version of the `WINE <https://www.winehq.org/>`_ parts of `Gallium Nine <https://github.com/iXit/wine>`_.
+Gallium Nine SDL, as the name implies, is an SDL port of the standalone version of the `WINE <https://www.winehq.org/>`_ parts of `Gallium Nine <https://github.com/iXit/wine>`_.
 
-This decouples Gallium Nine from the WINE tree, so that it can be used with any WINE version. There is no need for any WINE patches. A stable, development, or staging WINE release is sufficient.
-
-Gallium Nine Standalone consists of two parts:
-
-* ``d3d9-nine.dll``: Gallium Nine Direct3D 9 library
-* ``ninewinecfg.exe``: GUI to enable/disable Gallium Nine with some additional info about the current state
-
-Objective
----------
-* Official distro packages
-
-  Gallium Nine is a fork of the WINE tree, without any chances to be merged upstream. The decoupling of the WINE tree makes it its own upstream.
-
-* Ease updates for the user
-
-  WINE can be updated independently of Gallium Nine Standalone. Users can mix releases of both projects to their liking. Switching between staging and non-staging does not require a rebuild.
+This allows Gallium Nine to be used in native applications that aren't running in a WINE environment.
 
 Requirements
 ------------
@@ -37,30 +19,11 @@ Requirements
 
 Packages
 --------
-Your distribution may provide a package, avoiding the need to compile the code yourself. The exact usage instructions may vary in this case so check your distribution for the details. The currently known packages are:
-
-* Arch Linux - releases: `wine-nine <https://www.archlinux.org/packages/multilib/x86_64/wine-nine/>`_, snapshots: `gallium-nine-git (AUR) <https://aur.archlinux.org/packages/gallium-nine-git>`_
-* Gentoo Linux - `app-emulation/gallium-nine-standalone <https://packages.gentoo.org/packages/app-emulation/gallium-nine-standalone>`_
-* Slackware Linux - `wine-nine-standalone <https://slackbuilds.org/apps/wine-nine-standalone/>`_
-
-We also provide distro independent release binaries, available as `GitHub releases <https://github.com/iXit/wine-nine-standalone/releases>`_. You can either download these yourself (see Usage_ below), or install them via `Winetricks <https://github.com/Winetricks/winetricks>`_.
+No packages are provided, the easiest way to use it in your project is to submodule it and include it in your ``CMakeLists.txt``.
 
 Usage
 -----
-This part assumes that you downloaded a release binary or compiled using `release.sh` yourself.
-
-* Extract the tarball in e.g. your home directory
-* run the ``nine-install.sh`` script from the directory you extracted the tarball in
-
-The latter symlinks the extracted binaries to your WINE prefix and enables Gallium Nine Standalone. To target another WINE prefix than the standard ``~/.wine``, just set ``WINEPREFIX`` accordingly before you run ``nine-install.sh``.
-
-Gallium Nine Standalone comes with a GUI.
-
-For the 32bit version run ``wine ninewinecfg`` and for 64bit ``wine64 ninewinecfg``.
-
-Compiling
----------
-Please see `our wiki <https://github.com/iXit/wine-nine-standalone/wiki/Compiling>`_,  which also includes distro specific help.
+Link against the ``d3d9-nine`` static library and refer to main.cpp as an example on how to use the API.
 
 Backends
 --------

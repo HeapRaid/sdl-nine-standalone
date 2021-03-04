@@ -8,7 +8,7 @@
 
 #define ZeroMemory(p, s) memset(p, 0, s)
 #define IsEqualGUID(a, b) !memcmp(a, b, sizeof(GUID))
-#define InterlockedIncrement(p) __sync_fetch_and_add(p, 1) + 1
-#define InterlockedDecrement(p) __sync_fetch_and_sub(p, 1) - 1
+#define InterlockedIncrement(p) __sync_fetch_and_add(p, 1) + 1; __sync_synchronize()
+#define InterlockedDecrement(p) __sync_fetch_and_sub(p, 1) - 1; __sync_synchronize()
 
 #endif /* __COMPILER_H */

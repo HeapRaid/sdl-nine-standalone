@@ -79,38 +79,6 @@ struct d3dadapter9
 #define ADAPTER_OUTPUT \
     ADAPTER_GROUP.outputs[Adapter-This->map[Adapter].master]
 
-static int get_current_mode(struct d3dadapter9 *This, UINT Adapter)
-{
-    SDL_DisplayMode m;
-    SDL_PixelFormatEnum f;
-    int i;
-
-    ZeroMemory(&m, sizeof(m));
-    SDL_GetCurrentDisplayMode(Adapter, &m);
-
-    for (i = 0; i < ADAPTER_OUTPUT.nmodes; i++)
-    {
-        if (ADAPTER_OUTPUT.modes[i].w != m.w)
-            continue;
-
-        if (ADAPTER_OUTPUT.modes[i].h != m.h)
-            continue;
-
-        if (ADAPTER_OUTPUT.modes[i].refresh_rate != m.refresh_rate)
-            continue;
-
-        if (ADAPTER_OUTPUT.modes[i].format != f)
-            continue;
-
-        TRACE("current mode %d (%ux%ux%u)\n", i,
-              m.w, m.h, SDL_BITSPERPIXEL(m.format));
-
-        return i;
-    }
-
-    return -1;
-}
-
 static HRESULT WINAPI d3dadapter9_CheckDeviceFormat(struct d3dadapter9 *This,
         UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT AdapterFormat,
         DWORD Usage, D3DRESOURCETYPE RType, D3DFORMAT CheckFormat);
@@ -257,19 +225,19 @@ static HRESULT WINAPI d3dadapter9_EnumAdapterModes(struct d3dadapter9 *This,
 static HRESULT WINAPI d3dadapter9_GetAdapterDisplayMode(struct d3dadapter9 *This,
         UINT Adapter, D3DDISPLAYMODE *pMode)
 {
-    int Mode;
+    SDL_DisplayMode Mode;
 
     if (Adapter >= d3dadapter9_GetAdapterCount(This))
         return D3DERR_INVALIDCALL;
 
-    Mode = get_current_mode(This, Adapter);
-    if (Mode < 0)
+    ZeroMemory(&Mode, sizeof(Mode));
+    if (SDL_GetCurrentDisplayMode(Adapter, &Mode) < 0)
         return D3DERR_INVALIDCALL;
 
-    pMode->Width = ADAPTER_OUTPUT.modes[Mode].w;
-    pMode->Height = ADAPTER_OUTPUT.modes[Mode].h;
-    pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].refresh_rate;
-    pMode->Format = to_d3d_format(ADAPTER_OUTPUT.modes[Mode].format);
+    pMode->Width = Mode.w;
+    pMode->Height = Mode.h;
+    pMode->RefreshRate = Mode.refresh_rate;
+    pMode->Format = to_d3d_format(Mode.format);
 
     return D3D_OK;
 }
@@ -421,22 +389,22 @@ static HRESULT WINAPI d3dadapter9_EnumAdapterModesEx(struct d3dadapter9 *This,
 static HRESULT WINAPI d3dadapter9_GetAdapterDisplayModeEx(struct d3dadapter9 *This,
         UINT Adapter, D3DDISPLAYMODEEX *pMode, D3DDISPLAYROTATION *pRotation)
 {
-    int Mode;
+    SDL_DisplayMode Mode;
 
     if (Adapter >= d3dadapter9_GetAdapterCount(This))
         return D3DERR_INVALIDCALL;
 
     if (pMode)
     {
-        Mode = get_current_mode(This, Adapter);
-        if (Mode < 0)
+        ZeroMemory(&Mode, sizeof(Mode));
+        if (SDL_GetCurrentDisplayMode(Adapter, &Mode) < 0)
             return D3DERR_INVALIDCALL;
 
         pMode->Size = sizeof(D3DDISPLAYMODEEX);
-        pMode->Width = ADAPTER_OUTPUT.modes[Mode].w;
-        pMode->Height = ADAPTER_OUTPUT.modes[Mode].h;
-        pMode->RefreshRate = ADAPTER_OUTPUT.modes[Mode].refresh_rate;
-        pMode->Format = to_d3d_format(ADAPTER_OUTPUT.modes[Mode].format);
+        pMode->Width = Mode.w;
+        pMode->Height = Mode.h;
+        pMode->RefreshRate = Mode.refresh_rate;
+        pMode->Format = to_d3d_format(Mode.format);
         pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
     }
     if (pRotation)

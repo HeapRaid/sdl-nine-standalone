@@ -92,6 +92,11 @@ void initD3D(HWND hWnd)
 
     init_graphics();
 
+    HRESULT hr;
+    D3DDISPLAYMODE mode;
+    hr = d3d->GetAdapterDisplayMode(0, &mode);
+    hr = d3d->CheckDeviceType(0, D3DDEVTYPE_HAL, mode.Format, mode.Format, TRUE);
+
     d3ddev->SetRenderState(D3DRS_LIGHTING, FALSE);
     d3ddev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
     d3ddev->SetRenderState(D3DRS_ZENABLE, TRUE);
